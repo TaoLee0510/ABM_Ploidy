@@ -24,23 +24,23 @@ Dv: 0.9
 
 # Environmental oxygen supply level in [0,1] (used by oxygen field)
 #Coxy: [0,0.1,1,10,20.5]
-Coxy: [0,20.5]
+Coxy: [0,0.1,20.5]
 
 
 # Initial WGD proportion at initialization (0-1)
-WGDp: 1
+WGDp: 0
 
 # Per-division probability of WGD when there is space
-WGDr: 0.001
+WGDr: 0.01
 
 # Karyotype file path; must contain numeric column 'K'
-KaryoPath: "karyotypes.csv"
+KaryoPath: "/Users/taolee/Documents/GitHub/ABM_Ploidy/karyotypes.csv"
 
 #Maximum waiting time to death.
 Dtime: 120
 
 #Maximum simulation times.
-SimsPerCoxy: 2
+SimsPerCoxy: 8
 
 #Maximum chrom number
 PloidyMax: 10
@@ -59,4 +59,5 @@ O2VesselSoftSupply: true
 
 VesselDiameter: 10
 
-
+# Output directory for all simulation files
+OutDir: "/Volumes/Protable Disk/ABM_ploidy/"
