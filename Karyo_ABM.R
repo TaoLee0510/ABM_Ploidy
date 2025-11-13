@@ -1671,23 +1671,23 @@ simulate_step <- function(state) {
     }
   }
 
-  # If any cells died (any reason), log them and rebuild grid once
+  # If any cells died (any reason), log them for this step only and rebuild grid once
   if (any(cells$Status == 0L)) {
     dead_idx <- which(cells$Status == 0L)
     # Fill missing death reasons
     miss <- is.na(cells$DeathReason[dead_idx]) | cells$DeathReason[dead_idx] == ""
     if (any(miss)) cells$DeathReason[dead_idx[miss]] <- "unspecified"
-    # Record step and append to state$dead_log
+    # Record step and set state$dead_log to deaths from this step only
     step_tag <- state$step + 1L
     tolog <- cells[dead_idx, , drop = FALSE]
     tolog$Step <- step_tag
-    if (is.null(state$dead_log)) {
-      state$dead_log <- init_dead_log(cells)
-    }
-    state$dead_log <- rbind(state$dead_log, tolog)
+    state$dead_log <- tolog
     # Remove from the pool of living cells and rebuild grid
     cells <- cells[cells$Status == 1L, , drop = FALSE]
     grid  <- rebuild_grid_from_cells_cpp(grid, as.integer(cells$X), as.integer(cells$Y))
+  } else {
+    # No deaths this step: keep dead_log as an empty template
+    state$dead_log <- init_dead_log(cells)
   }
 
   state$cells <- cells
@@ -1728,7 +1728,12 @@ run_simulation <- function(state, steps = 240L, verbose_every = 24L, out_dir = "
 # -------------------------------
 #  usage
 # -------------------------------
+
+setwd('/Users/taolee/Documents/GitHub/ABM_Ploidy')
+
 cfg <- read_config('/Users/4482173/Documents/IMO_workshop13/config.yaml')
+cfg <- read_config('/Users/taolee/Documents/GitHub/ABM_Ploidy/config.yaml')
+
 
 # Parallel runs over mapped Coxy values with dynamic resource allocation:
 # - Priority breadth across Coxy (ri layered)
