@@ -559,107 +559,115 @@ run_simulation <- function(state,
   state
 }
 
+
 # -------------------------------
-# Usage / driver
+# Batch simulation driver
 # -------------------------------
-# 1) Read config, build job list, run in parallel
-
-Rcpp::sourceCpp("/Users/taolee/Documents/GitHub/ABM_Ploidy/abm_core.cpp")
-
-# Choose one config path (comment/uncomment as needed)
-# cfg <- read_config("/Users/4482173/Documents/IMO_workshop13/config.yaml")
-cfg <- read_config("/Users/taolee/Documents/GitHub/ABM_Ploidy/config.yaml")
-
-# Set output base directory from config (fallback to "data")
-out_base_dir <- if (!is.null(cfg$OutDir) && nzchar(cfg$OutDir)) cfg$OutDir else "data"
-
-if (!is.numeric(cfg$Coxy)) stop("cfg$Coxy must be numeric after read_config")
-
-coxy_vec_full <- as.numeric(cfg$Coxy)
-# Keep 0 inside cfg$Coxy for scaling/mapping; skip zero in actual simulation runs
-coxy_vec <- coxy_vec_full[is.finite(coxy_vec_full) & coxy_vec_full > 0]
-if (length(coxy_vec) == 0L) {
-  stop("After excluding Coxy==0, no positive Coxy values remain to simulate.")
-}
-
-n_runs <- length(coxy_vec)
-S      <- as.integer(cfg$SimsPerCoxy)
-
-# Build layered job list: ri = 1..S, for each ci = 1..n_runs
-jobs <- vector("list", n_runs * S)
-idx  <- 1L
-for (ri in seq_len(S)) {
-  for (ci in seq_len(n_runs)) {
-    jobs[[idx]] <- list(ci = ci, ri = ri)
-    idx <- idx + 1L
+# Wrap the full "build jobs -> run in parallel -> print summary" pipeline
+# into a reusable function. The caller must provide:
+#   - cfg: list from read_config()
+#   - cpp_path: path to abm_core.cpp for sourceCpp()
+#   - steps: number of simulation steps per run
+run_abm_simulations <- function(cfg, cpp_path, steps = 720L) {
+  if (!file.exists(cpp_path)) {
+    stop("cpp_path not found: ", cpp_path)
   }
-}
 
-run_job <- function(job) {
-  tryCatch({
-    ci <- job$ci
-    ri <- job$ri
+  # Compile / load C++ core
+  Rcpp::sourceCpp(cpp_path)
 
-    cfg_run <- cfg
-    cfg_run$Coxy_scalar <- coxy_vec[ci]
+  # Output base directory from config (fallback to "data")
+  out_base_dir <- if (!is.null(cfg$OutDir) && nzchar(cfg$OutDir)) cfg$OutDir else "data"
 
-    coxy_dir <- sprintf("Coxy_%0.6f", cfg_run$Coxy_scalar)
-    out_dir  <- file.path(out_base_dir, coxy_dir, sprintf("Rep_%03d", ri))
+  if (!is.numeric(cfg$Coxy)) stop("cfg$Coxy must be numeric after read_config")
 
-    state <- init_simulation(cfg_run, seed = NULL)
-    state <- run_simulation(state, steps = 720, out_dir = out_dir)
+  coxy_vec_full <- as.numeric(cfg$Coxy)
+  # Keep 0 inside cfg$Coxy for scaling/mapping; skip zero in actual simulation runs
+  coxy_vec <- coxy_vec_full[is.finite(coxy_vec_full) & coxy_vec_full > 0]
+  if (length(coxy_vec) == 0L) {
+    stop("After excluding Coxy==0, no positive Coxy values remain to simulate.")
+  }
 
-    list(
-      status = "ok",
-      ci     = ci,
-      ri     = ri,
-      coxy   = cfg_run$Coxy_scalar,
-      out_dir = out_dir,
-      alive   = sum(state$cells$Status == 1L)
-    )
-  }, error = function(e) {
-    list(
-      status = "error",
-      ci     = job$ci,
-      ri     = job$ri,
-      coxy   = if (job$ci >= 1 && job$ci <= length(coxy_vec))
-                 coxy_vec[job$ci] else NA_real_,
-      out_dir = NA_character_,
-      alive   = NA_integer_,
-      error   = conditionMessage(e)
-    )
-  })
-}
+  n_runs <- length(coxy_vec)
+  S      <- as.integer(cfg$SimsPerCoxy)
 
-
-if (.Platform$OS.type == "windows") {
-  res_list <- lapply(jobs, run_job)
-} else {
-  ncores <- max(1L, parallel::detectCores(logical = TRUE) - 1L)
-  res_list <- parallel::mclapply(
-    jobs, run_job,
-    mc.cores      = ncores,
-    mc.preschedule = FALSE
-  )
-}
-
-invisible(lapply(seq_along(res_list), function(i) {
-  res <- res_list[[i]]
-  if (is.list(res) && !is.null(res$coxy)) {
-    msg_err <- if (!is.null(res$status) && res$status == "error") {
-      sprintf(" [ERROR: %s]", res$error)
-    } else {
-      ""
+  # Build layered job list: ri = 1..S, for each ci = 1..n_runs
+  jobs <- vector("list", n_runs * S)
+  idx  <- 1L
+  for (ri in seq_len(S)) {
+    for (ci in seq_len(n_runs)) {
+      jobs[[idx]] <- list(ci = ci, ri = ri)
+      idx <- idx + 1L
     }
-    cat(sprintf(
-      "\n[RUN Coxy=%0.6f rep=%03d] finished. Alive cells: %s%s\n",
-      as.numeric(res$coxy),
-      as.integer(res$ri),
-      ifelse(is.na(res$alive), "NA", as.character(res$alive)),
-      msg_err
-    ))
-  } else {
-    cat(sprintf("\n[RUN #%d] unexpected result type: %s\n", i, typeof(res)))
   }
-}))
+
+  run_job <- function(job) {
+    tryCatch({
+      ci <- job$ci
+      ri <- job$ri
+
+      cfg_run <- cfg
+      cfg_run$Coxy_scalar <- coxy_vec[ci]
+
+      coxy_dir <- sprintf("Coxy_%0.6f", cfg_run$Coxy_scalar)
+      out_dir  <- file.path(out_base_dir, coxy_dir, sprintf("Rep_%03d", ri))
+
+      state <- init_simulation(cfg_run, seed = NULL)
+      state <- run_simulation(state, steps = steps, out_dir = out_dir)
+
+      list(
+        status = "ok",
+        ci     = ci,
+        ri     = ri,
+        coxy   = cfg_run$Coxy_scalar,
+        out_dir = out_dir,
+        alive   = sum(state$cells$Status == 1L)
+      )
+    }, error = function(e) {
+      list(
+        status = "error",
+        ci     = job$ci,
+        ri     = job$ri,
+        coxy   = if (job$ci >= 1 && job$ci <= length(coxy_vec))
+                   coxy_vec[job$ci] else NA_real_,
+        out_dir = NA_character_,
+        alive   = NA_integer_,
+        error   = conditionMessage(e)
+      )
+    })
+  }
+
+  if (.Platform$OS.type == "windows") {
+    res_list <- lapply(jobs, run_job)
+  } else {
+    ncores <- max(1L, parallel::detectCores(logical = TRUE) - 1L)
+    res_list <- parallel::mclapply(
+      jobs, run_job,
+      mc.cores       = ncores,
+      mc.preschedule = FALSE
+    )
+  }
+
+  invisible(lapply(seq_along(res_list), function(i) {
+    res <- res_list[[i]]
+    if (is.list(res) && !is.null(res$coxy)) {
+      msg_err <- if (!is.null(res$status) && res$status == "error") {
+        sprintf(" [ERROR: %s]", res$error)
+      } else {
+        ""
+      }
+      cat(sprintf(
+        "\n[RUN Coxy=%0.6f rep=%03d] finished. Alive cells: %s%s\n",
+        as.numeric(res$coxy),
+        as.integer(res$ri),
+        ifelse(is.na(res$alive), "NA", as.character(res$alive)),
+        msg_err
+      ))
+    } else {
+      cat(sprintf("\n[RUN #%d] unexpected result type: %s\n", i, typeof(res)))
+    }
+  }))
+
+  invisible(res_list)
+}
 

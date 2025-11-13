@@ -34,7 +34,7 @@ WGDp: 0
 WGDr: 0.01
 
 # Karyotype file path; must contain numeric column 'K'
-KaryoPath: "/Users/taolee/Documents/GitHub/ABM_Ploidy/karyotypes.csv"
+KaryoPath: "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/karyotypes.csv"
 
 #Maximum waiting time to death.
 Dtime: 120
@@ -60,4 +60,4 @@ O2VesselSoftSupply: true
 VesselDiameter: 10
 
 # Output directory for all simulation files
-OutDir: "/Volumes/Protable Disk/ABM_ploidy/"
+OutDir: "/Users/4482173/Documents/IMO_workshop13/ABM_results/"
