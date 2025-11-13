@@ -28,10 +28,10 @@ Coxy: [0,0.1,20.5]
 
 
 # Initial WGD proportion at initialization (0-1)
-WGDp: 0
+WGDp: 1
 
 # Per-division probability of WGD when there is space
-WGDr: 0.01
+WGDr: [0,0.01,0.1,0.2]
 
 # Karyotype file path; must contain numeric column 'K'
 KaryoPath: "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/karyotypes.csv"
@@ -40,7 +40,7 @@ KaryoPath: "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/karyotypes.c
 Dtime: 120
 
 #Maximum simulation times.
-SimsPerCoxy: 8
+SimsPerCoxy: 1
 
 #Maximum chrom number
 PloidyMax: 10

@@ -11,13 +11,13 @@ suppressPackageStartupMessages({
 # ---- User-configurable paths ----
 # Top-level directory where your simulation outputs are written.
 # E.g., "data" contains subfolders like Coxy_0.123456/Rep_001/Sim_t000001.rds
-base_dir <- "/Users/4482173/Documents/IMO_workshop13/Hpoxia/Low"
-setwd('/Users/4482173/Documents/IMO_workshop13/Hpoxia/Low')
+base_dir <- "/Users/4482173/Documents/IMO_workshop13/ABM_results/WGDp_0"
+setwd('/Users/4482173/Documents/IMO_workshop13/ABM_results/WGDp_0')
 # Output folders for figures
-out_scatter_dir <- file.path("analysis_plots_low", "scatter_by_time")
-out_violin_dir  <- file.path("analysis_plots_low", "violin_P_over_time")
-out_cells_dir <- file.path("analysis_plots_low", "scatter_cells_by_time")
-out_ploidy_hist_dir <- file.path("analysis_plots_low", "ploidy_hist_by_time")
+out_scatter_dir <- file.path("analysis_plots_WGDp_0", "scatter_by_time")
+out_violin_dir  <- file.path("analysis_plots_WGDp_0", "violin_P_over_time")
+out_cells_dir <- file.path("analysis_plots_WGDp_0", "scatter_cells_by_time")
+out_ploidy_hist_dir <- file.path("analysis_plots_WGDp_0", "ploidy_hist_by_time")
 dir_create <- function(p) if (!dir.exists(p)) dir.create(p, recursive = TRUE, showWarnings = FALSE)
 dir_create(out_scatter_dir)
 dir_create(out_violin_dir)

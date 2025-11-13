@@ -70,7 +70,17 @@ read_config <- function(path) {
 
   cfg$Dv    <- max(0, min(1, cfg$Dv))
   cfg$WGDp  <- max(0, min(1, cfg$WGDp))
-  cfg$WGDr  <- max(0, min(1, cfg$WGDr))
+  
+  wd <- cfg$WGDr
+  if (is.list(wd)) wd <- unlist(wd, recursive = TRUE, use.names = FALSE)
+  wd <- suppressWarnings(as.numeric(wd))
+  if (length(wd) == 0L || all(is.na(wd))) {
+    stop("WGDr must be numeric (scalar or numeric vector)")
+  }
+  wd <- wd[is.finite(wd)]
+  if (length(wd) == 0L) stop("WGDr contains no finite numeric values")
+  cfg$WGDr <- wd
+  
   cfg$m     <- max(0, min(100, cfg$m))
 
   # MSR interpreted as probability per chromosome per mitosis
