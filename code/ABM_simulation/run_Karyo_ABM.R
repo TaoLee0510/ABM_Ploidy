@@ -7,18 +7,18 @@ suppressPackageStartupMessages({
 })
 
 ## 1) Source core ABM utilities (read_config, init_simulation, run_abm_simulations, etc.)
-source("/Users/4482173/Documents/GitHub/ABM_Ploidy/code/ABM_simulation/Karyo_ABM.R")  # Ensure path points to the correct Karyo_ABM.R
+source("/Users/taolee/Documents/GitHub/ABM_Ploidy/code/ABM_simulation/Karyo_ABM.R")  # Ensure path points to the correct Karyo_ABM.R
 
 ## 2) Read configuration file
 # Modify this to your actual config.yaml path
-cfg_path <- "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/config.yaml"
+cfg_path <- "/Users/taolee/Documents/GitHub/ABM_Ploidy/ReqiuredData/config.yaml"
 cfg <- read_config(cfg_path)
 
 ## 3) Set C++ source path
-cpp_path <- "/Users/4482173/Documents/GitHub/ABM_Ploidy/code/ABM_simulation/abm_core.cpp"
+cpp_path <- "/Users/taolee/Documents/GitHub/ABM_Ploidy/code/ABM_simulation/abm_core.cpp"
 
 ## 4) Set number of simulation steps
-steps <- 1440L   # Adjustable
+steps <- 4320L   # Adjustable
 
 ## 5) Loop over WGDr values (if provided) and run batch simulations
 wgdr_values <- cfg$WGDr

@@ -8,7 +8,7 @@ R: 1.048
 m: 10
 
 # Base mis-segregation rate per division
-MSR: 0.01 # 1% per chromesome per motosis ###https://bionumbers.hms.harvard.edu/bionumber.aspx?id=105284&ver=7&trm=Rate+of+missegregation+of+a+chromosome++tumor+&org=
+MSR: 0.003 # 0.3-1% per chromesome per motosis ###https://bionumbers.hms.harvard.edu/bionumber.aspx?id=105284&ver=7&trm=Rate+of+missegregation+of+a+chromosome++tumor+&org=
 
 # Environmental MSR modulation factor in [-1, 1]
 alpha: 0.5
@@ -28,16 +28,16 @@ Coxy: [0,0.1,20.5]
 
 
 # Initial WGD proportion at initialization (0-1)
-WGDp: 1
+WGDp: 0
 
 # Per-division probability of WGD when there is space
 WGDr: [0,0.01,0.1,0.2]
 
 # Karyotype file path; must contain numeric column 'K'
-KaryoPath: "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/karyotypes.csv"
+#KaryoPath: "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/karyotypes.csv"
 
 #Maximum waiting time to death.
-Dtime: 120
+Dtime: 96
 
 #Maximum simulation times.
 SimsPerCoxy: 1
@@ -60,4 +60,4 @@ O2VesselSoftSupply: true
 VesselDiameter: 10
 
 # Output directory for all simulation files
-OutDir: "/Users/4482173/Documents/IMO_workshop13/ABM_results/"
+OutDir: "/Volumes/Protable Disk/ABM_ploidy"

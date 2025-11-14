@@ -37,7 +37,7 @@ read_config <- function(path) {
   cfg <- yaml::read_yaml(path)
 
   required <- c("N1","R","m","MSR","alpha","Db","beta","Dv","Coxy",
-                "WGDp","WGDr","KaryoPath","Dtime")
+                "WGDp","WGDr","Dtime")
   miss <- setdiff(required, names(cfg))
   if (length(miss) > 0) {
     stop("Missing config keys: ", paste(miss, collapse = ", "))
@@ -410,7 +410,15 @@ init_simulation <- function(cfg, seed = NULL) {
   O2 <- matrix(cfg$Coxy_scalar, nrow = N, ncol = N)
 
   # Initialize karyotypes from K distribution
-  K <- load_K_column(cfg$KaryoPath)
+  if (is.null(cfg$KaryoPath) || !nzchar(cfg$KaryoPath)) {
+    # Fallback: synthetic K from a very narrow LogNormal with mean 2
+    set.seed(123)
+    mu_target <- log(2)
+    sigma <- 0.01
+    K <- rlnorm(2000L, meanlog = mu_target, sdlog = sigma)
+  } else {
+    K <- load_K_column(cfg$KaryoPath)
+  }
   fit <- fit_lognormal_from_K(K)
 
   # Initial seeding density: m% of non-vessel grid
