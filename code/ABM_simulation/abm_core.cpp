@@ -720,6 +720,401 @@ IntegerMatrix rebuild_grid_from_cells_cpp(IntegerMatrix grid,
   return grid;
 }
 
+
+
+// [[Rcpp::export]]
+List init_simulation_cpp(List cfg, double mu, double sigma) {
+  // 1) Basic parameters
+  int N = as<int>(cfg["N1"]);
+  IntegerMatrix grid(N, N);
+  for (int i = 0; i < N; ++i)
+    for (int j = 0; j < N; ++j)
+      grid(i, j) = NA_INTEGER;
+
+  // Coxy_scalar: use cfg$Coxy_scalar if present, otherwise derive from cfg$Coxy (single value or mean of vector)
+  double Coxy_scalar = 1.0;
+  if (cfg.containsElementNamed("Coxy_scalar")) {
+    Coxy_scalar = as<double>(cfg["Coxy_scalar"]);
+  } else if (cfg.containsElementNamed("Coxy")) {
+    NumericVector cx = cfg["Coxy"];
+    int k = cx.size();
+    if (k == 1) {
+      Coxy_scalar = cx[0];
+    } else if (k > 1) {
+      long double s = 0.0L;
+      int n = 0;
+      for (int i = 0; i < k; ++i) {
+        double v = cx[i];
+        if (R_finite(v)) {
+          s += v;
+          ++n;
+        }
+      }
+      if (n > 0) Coxy_scalar = (double)(s / (long double)n);
+    }
+  }
+
+  // 2) Vessel geometry + vessel_mask
+  IntegerMatrix vessel_mask(N, N);
+  for (int i = 0; i < N; ++i)
+    for (int j = 0; j < N; ++j)
+      vessel_mask(i, j) = 0;
+
+  auto clamp_inside = [&](int &ci, int &cj, int r) {
+    int minc = 1 + r;
+    int maxc = N - r;
+    if (maxc < minc) {
+      ci = std::max(1, std::min(N, ci));
+      cj = std::max(1, std::min(N, cj));
+      return;
+    }
+    if (ci < minc) ci = minc;
+    if (ci > maxc) ci = maxc;
+    if (cj < minc) cj = minc;
+    if (cj > maxc) cj = maxc;
+  };
+
+  auto draw_disc = [&](int ci, int cj, int diam) {
+    if (diam < 1) return;
+    int r = (int)std::ceil((double)diam / 2.0);
+    clamp_inside(ci, cj, r);
+    int imin = std::max(1, ci - r);
+    int imax = std::min(N, ci + r);
+    int jmin = std::max(1, cj - r);
+    int jmax = std::min(N, cj + r);
+    for (int ii = imin; ii <= imax; ++ii) {
+      for (int jj = jmin; jj <= jmax; ++jj) {
+        int di = ii - ci;
+        int dj = jj - cj;
+        if (di * di + dj * dj <= r * r) {
+          vessel_mask(ii - 1, jj - 1) = 1;
+        }
+      }
+    }
+  };
+
+  int default_diam = 10;
+  if (cfg.containsElementNamed("VesselDiameter")) {
+    int dtmp = as<int>(cfg["VesselDiameter"]);
+    if (R_finite(dtmp) && dtmp > 0) default_diam = dtmp;
+  }
+
+  bool vessel_random =
+    (cfg.containsElementNamed("VesselRandom") &&
+     as<bool>(cfg["VesselRandom"]));
+
+  if (vessel_random) {
+    int n_vessels = 2;
+    if (cfg.containsElementNamed("VesselCount")) {
+      int tmp = as<int>(cfg["VesselCount"]);
+      if (R_finite(tmp) && tmp >= 1) n_vessels = tmp;
+    }
+
+    int dmin = default_diam;
+    int dmax = default_diam;
+    if (cfg.containsElementNamed("VesselDiameterMin")) {
+      int tmp = as<int>(cfg["VesselDiameterMin"]);
+      if (R_finite(tmp) && tmp >= 1) dmin = tmp;
+    }
+    if (cfg.containsElementNamed("VesselDiameterMax")) {
+      int tmp = as<int>(cfg["VesselDiameterMax"]);
+      if (R_finite(tmp) && tmp >= dmin) dmax = tmp;
+    }
+    if (dmin < 1) dmin = 1;
+    if (dmax < dmin) dmax = dmin;
+
+    for (int k = 0; k < n_vessels; ++k) {
+      int diam;
+      if (dmin == dmax) {
+        diam = dmin;
+      } else {
+        double u = R::runif(0.0, 1.0);
+        int span = dmax - dmin + 1;
+        int off = (int)std::floor(u * span);
+        if (off >= span) off = span - 1;
+        diam = dmin + off;
+      }
+      int ci = (int)std::floor(R::runif(0.0, 1.0) * N) + 1;
+      if (ci < 1) ci = 1;
+      if (ci > N) ci = N;
+      int cj = (int)std::floor(R::runif(0.0, 1.0) * N) + 1;
+      if (cj < 1) cj = 1;
+      if (cj > N) cj = N;
+      draw_disc(ci, cj, diam);
+    }
+  } else {
+    int diam = default_diam;
+    int r = (int)std::ceil((double)diam / 2.0);
+    int half = (int)std::round((double)N / 2.0);
+    int q1   = (int)std::round((double)N / 4.0);
+    int q3   = (int)std::round(3.0 * (double)N / 4.0);
+    int c1i = half, c1j = half;
+    int c2i = q1,   c2j = half;
+    int c3i = q3,   c3j = half;
+    int c4i = half, c4j = q1;
+    int c5i = half, c5j = q3;
+    clamp_inside(c1i, c1j, r);
+    clamp_inside(c2i, c2j, r);
+    clamp_inside(c3i, c3j, r);
+    clamp_inside(c4i, c4j, r);
+    clamp_inside(c5i, c5j, r);
+    draw_disc(c1i, c1j, diam);
+    draw_disc(c2i, c2j, diam);
+    draw_disc(c3i, c3j, diam);
+    draw_disc(c4i, c4j, diam);
+    draw_disc(c5i, c5j, diam);
+  }
+
+  // 3) Initialize O2 field
+  NumericMatrix O2(N, N);
+  for (int i = 0; i < N; ++i)
+    for (int j = 0; j < N; ++j)
+      O2(i, j) = Coxy_scalar;
+
+  // 4) Initialize cells: randomly occupy m% (cfg$m) of non-vessel locations
+  double mperc = 10.0;
+  if (cfg.containsElementNamed("m")) {
+    double tmp = as<double>(cfg["m"]);
+    if (R_finite(tmp)) {
+      if (tmp < 0.0) tmp = 0.0;
+      if (tmp > 100.0) tmp = 100.0;
+      mperc = tmp;
+    }
+  }
+
+  std::vector<int> allowed;
+  allowed.reserve(N * N);
+  for (int i = 0; i < N; ++i) {
+    for (int j = 0; j < N; ++j) {
+      if (vessel_mask(i, j) == 0)
+        allowed.push_back(i * N + j); // 0-based index
+    }
+  }
+
+  int total_allowed = (int)allowed.size();
+  int n_init = (int)std::round((double)N * (double)N * (mperc / 100.0));
+  if (n_init < 1) n_init = 1;
+  if (n_init > total_allowed) {
+    stop("Not enough non-vessel locations to place initial cells. Reduce m or vessel diameter.");
+  }
+
+  // Fisher-Yates shuffle, then take the first n_init positions
+  for (int t = total_allowed - 1; t > 0; --t) {
+    double u = R::runif(0.0, 1.0);
+    int k = (int)std::floor(u * (t + 1));
+    if (k < 0) k = 0;
+    if (k > t) k = t;
+    std::swap(allowed[t], allowed[k]);
+  }
+
+  IntegerVector X(n_init), Y(n_init);
+  IntegerVector Status(n_init, 1);
+  NumericVector Rv(n_init), Dv(n_init), Pv(n_init), Gv(n_init), DivTime(n_init), Timev(n_init);
+  IntegerVector WGDLabel(n_init, 0), WGDCount(n_init, 0), Quiescent(n_init, 0);
+  NumericVector QuiescentTime(n_init, 0.0);
+  CharacterVector DeathReason(n_init, NA_STRING);
+
+  double R_param = cfg.containsElementNamed("R") ? as<double>(cfg["R"]) : 1.0;
+  double Db_param = cfg.containsElementNamed("Db") ? as<double>(cfg["Db"]) : 0.0;
+
+  for (int idx = 0; idx < n_init; ++idx) {
+    int flat = allowed[idx];
+    int i = flat / N;
+    int j = flat % N;
+    X[idx] = i + 1;
+    Y[idx] = j + 1;
+    grid(i, j) = idx + 1;
+    Rv[idx] = R_param;
+    Dv[idx] = Db_param;
+    Gv[idx] = NA_REAL;
+    DivTime[idx] = 0.0;
+    Timev[idx] = 0.0;
+  }
+
+  // 5) Initialize ploidy P (LogNormal(mu, sigma)) and convert to integer karyotype
+  double PloidyMax = R_PosInf;
+  if (cfg.containsElementNamed("PloidyMax")) {
+    double pmax = as<double>(cfg["PloidyMax"]);
+    if (R_finite(pmax) && pmax > 0.0) PloidyMax = pmax;
+  }
+
+  double pmax_cap = PloidyMax;
+  if (!R_finite(pmax_cap) || pmax_cap <= 0.0) {
+    pmax_cap = R_PosInf;
+  }
+
+  for (int i = 0; i < n_init; ++i) {
+    double z = R::rnorm(mu, sigma);
+    double p = std::exp(z);
+    if (R_finite(pmax_cap)) {
+      if (p > pmax_cap) p = pmax_cap;
+      if (p < 0.0) p = 0.0;
+    }
+    Pv[i] = p;
+  }
+
+  NumericVector CHR_W = get_chr_w();
+  int chr_n = CHR_W.size();
+  if (chr_n != 22) {
+    stop("CHR_W must have length 22.");
+  }
+
+  int max_copy_cpp =
+    (R_finite(PloidyMax)) ? (int)PloidyMax : std::numeric_limits<int>::max();
+
+  IntegerMatrix kt_mat =
+    karyotype_from_P_batch_weighted_cpp(Pv, CHR_W, 1e-3, 20000, max_copy_cpp);
+
+  int init_cap = 5;
+  if (R_finite(PloidyMax)) {
+    double cand = PloidyMax;
+    if (cand < init_cap) init_cap = (int)cand;
+  }
+  for (int i = 0; i < n_init; ++i) {
+    for (int c = 0; c < 22; ++c) {
+      int v = kt_mat(i, c);
+      if (v > init_cap) v = init_cap;
+      kt_mat(i, c) = v;
+    }
+  }
+
+  Pv = mean_copy_number_rows_weighted_cpp(kt_mat, CHR_W);
+
+  // 6) Initialize WGD: apply whole-genome doubling to a fraction of cells according to cfg$WGDp
+  double WGDp_param = 0.0;
+  if (cfg.containsElementNamed("WGDp")) {
+    double tmp = as<double>(cfg["WGDp"]);
+    if (R_finite(tmp) && tmp > 0.0) {
+      if (tmp > 1.0) tmp = 1.0;
+      WGDp_param = tmp;
+    }
+  }
+
+  if (WGDp_param > 0.0 && n_init > 0) {
+    int k = (int)std::floor((double)n_init * WGDp_param);
+    if (k > 0) {
+      std::vector<int> idxs(n_init);
+      for (int i = 0; i < n_init; ++i) idxs[i] = i;
+      for (int t = n_init - 1; t > 0; --t) {
+        double u = R::runif(0.0, 1.0);
+        int j = (int)std::floor(u * (t + 1));
+        if (j < 0) j = 0;
+        if (j > t) j = t;
+        std::swap(idxs[t], idxs[j]);
+      }
+      for (int t = 0; t < k; ++t) {
+        int i = idxs[t];
+        for (int c = 0; c < 22; ++c) {
+          long v = (long)kt_mat(i, c) * 2L;
+          if (R_finite(PloidyMax) && v > (long)max_copy_cpp) {
+            v = (long)max_copy_cpp;
+          }
+          kt_mat(i, c) = (int)v;
+        }
+        WGDLabel[i] = 1;
+        WGDCount[i] = WGDCount[i] + 1;
+      }
+      Pv = mean_copy_number_rows_weighted_cpp(kt_mat, CHR_W);
+    }
+  }
+
+  // 7) Build C1..C22 from the new karyotype and compute initial G / DivisionTime
+  std::vector<std::string> c_names;
+  c_names.reserve(22);
+  for (int c = 1; c <= 22; ++c) {
+    c_names.push_back("C" + std::to_string(c));
+  }
+  std::vector<IntegerVector> C(22);
+  for (int c = 0; c < 22; ++c) {
+    IntegerVector col(n_init);
+    for (int i = 0; i < n_init; ++i) {
+      col[i] = kt_mat(i, c);
+    }
+    C[c] = col;
+  }
+
+  double beta = 1.0;
+  if (cfg.containsElementNamed("beta")) {
+    double tmp = as<double>(cfg["beta"]);
+    if (R_finite(tmp) && tmp > 0.0) beta = tmp;
+  }
+
+  List gd = compute_G_and_Div_cpp(
+    grid, O2,
+    X, Y,
+    Rv, Pv,
+    beta,
+    121,
+    5
+  );
+  NumericVector G0 = gd["G"];
+  NumericVector Div0 = gd["DivisionTime"];
+  for (int i = 0; i < n_init; ++i) {
+    Gv[i] = G0[i];
+    DivTime[i] = Div0[i];
+    Timev[i] = R::runif(0.0, 24.0);
+  }
+
+  // 8) Build cells DataFrame
+  List cells_list;
+  cells_list["X"] = X;
+  cells_list["Y"] = Y;
+  for (int c = 0; c < 22; ++c) {
+    cells_list[c_names[c]] = C[c];
+  }
+  cells_list["R"] = Rv;
+  cells_list["D"] = Dv;
+  cells_list["P"] = Pv;
+  cells_list["G"] = Gv;
+  cells_list["WGDLabel"] = WGDLabel;
+  cells_list["WGDCount"] = WGDCount;
+  cells_list["DivisionTime"] = DivTime;
+  cells_list["Time"] = Timev;
+  cells_list["Status"] = Status;
+  cells_list["Quiescent"] = Quiescent;
+  cells_list["QuiescentTime"] = QuiescentTime;
+  cells_list["DeathReason"] = DeathReason;
+
+  DataFrame cells_df(cells_list);
+
+  // 9) Build an empty dead_log with the same columns as cells plus Step
+  List empty_cells;
+  empty_cells["X"] = IntegerVector(0);
+  empty_cells["Y"] = IntegerVector(0);
+  for (int c = 0; c < 22; ++c) {
+    empty_cells[c_names[c]] = IntegerVector(0);
+  }
+  empty_cells["R"] = NumericVector(0);
+  empty_cells["D"] = NumericVector(0);
+  empty_cells["P"] = NumericVector(0);
+  empty_cells["G"] = NumericVector(0);
+  empty_cells["WGDLabel"] = IntegerVector(0);
+  empty_cells["WGDCount"] = IntegerVector(0);
+  empty_cells["DivisionTime"] = NumericVector(0);
+  empty_cells["Time"] = NumericVector(0);
+  empty_cells["Status"] = IntegerVector(0);
+  empty_cells["Quiescent"] = IntegerVector(0);
+  empty_cells["QuiescentTime"] = NumericVector(0);
+  empty_cells["DeathReason"] = CharacterVector(0);
+  empty_cells["Step"] = IntegerVector(0);
+  DataFrame dead_log(empty_cells);
+
+  // 10) Return state list
+  List state = List::create(
+    _["grid"]        = grid,
+    _["O2"]          = O2,
+    _["cells"]       = cells_df,
+    _["cfg"]         = cfg,
+    _["step"]        = 0,
+    _["vessel_mask"] = vessel_mask,
+    _["dead_log"]    = dead_log
+  );
+
+  return state;
+}
+
+
+
 //
 // --------------- Main core: simulate_step_cpp ----------------
 //
@@ -860,7 +1255,7 @@ List simulate_step_cpp(List state) {
     }
   }
 
-  // -------- 1) Time++ for alive --------
+  // -------- 1) Increase Time for alive cells --------
   for (int i = 0; i < n_cells; ++i) {
     if (Status[i] == 1) {
       Time[i] += 1.0;
@@ -1006,7 +1401,7 @@ List simulate_step_cpp(List state) {
       continue;
     }
 
-    // Quiescence: full 11x11 window
+    // Quiescence: full 11x11 window for local crowding check
     int rmin = std::max(1, i - 5);
     int rmax = std::min(N, i + 5);
     int cmin = std::max(1, j - 5);

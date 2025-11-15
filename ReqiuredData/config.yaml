@@ -24,16 +24,16 @@ Dv: 0.9
 
 # Environmental oxygen supply level in [0,1] (used by oxygen field)
 #Coxy: [0,0.1,1,10,20.5]
-#Coxy: [0,0.1,20.5]
-Coxy: [0,20.5]
+Coxy: [0,0.1,20.5]
+#Coxy: [0,20.5]
 
 
 # Initial WGD proportion at initialization (0-1)
-WGDp: 0
+WGDp: 1
 
 # Per-division probability of WGD when there is space
-#WGDr: [0,0.01,0.1,0.2]
-WGDr: [0.1]
+WGDr: [0,0.01,0.1,0.2]
+#WGDr: [0.1]
 
 # Karyotype file path; must contain numeric column 'K'
 #KaryoPath: "/Users/4482173/Documents/GitHub/ABM_Ploidy/ReqiuredData/karyotypes.csv"
@@ -50,7 +50,7 @@ PloidyMax: 10
 #QuiescentDeathHours
 QuiescentDeathHours: 72
 
-CrowdingSoftness: 0.05
+CrowdingSoftness: 0.01
 
 O2UseBoundary: true            # edge on/off
 O2BoundaryMode: dirichlet_edges  # 'dirichlet_edges' 或 'neumann'
@@ -76,7 +76,7 @@ OutDir: "/Volumes/Protable Disk/ABM_ploidy"
 
 #Seed: 12345
 
-MigProb: 0.2
+MigProb: 0.05
 
 # Optional bias of migration toward higher O2 / vessel regions
 MigBiasToVessel: true

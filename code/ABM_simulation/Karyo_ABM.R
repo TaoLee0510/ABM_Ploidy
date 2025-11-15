@@ -453,7 +453,7 @@ init_dead_log <- function(cells_template) {
 # -------------------------------
 
 init_simulation <- function(cfg, seed = NULL) {
-  # Seed control is handled locally in this initializer.
+  # Seed control for initialization.
   # Priority: explicit argument > cfg$Seed > random seed.
   seed_to_use <- NA_integer_
 
@@ -469,182 +469,29 @@ init_simulation <- function(cfg, seed = NULL) {
 
   set.seed(seed_to_use)
 
-  N <- as.integer(cfg$N1)
-  grid <- matrix(NA_integer_, nrow = N, ncol = N)
-
-  # Determine scalar oxygen supply for this run
-  if (is.null(cfg$Coxy_scalar)) {
-    cfg$Coxy_scalar <- if (length(cfg$Coxy) <= 1L) {
-      as.numeric(cfg$Coxy)
-    } else {
-      mean(as.numeric(cfg$Coxy), na.rm = TRUE)
-    }
-  }
-
-  # Vessel geometry
-  # If VesselRandom is TRUE, generate random vessel centers and diameters.
-  # Otherwise, use either explicit VesselCenters or the default five-vessel pattern.
-  default_diam <- if (!is.null(cfg$VesselDiameter)) as.integer(cfg$VesselDiameter) else 10L
-
-  if (!is.null(cfg$VesselRandom) && isTRUE(cfg$VesselRandom)) {
-    # Number of random vessels
-    n_vessels <- if (!is.null(cfg$VesselCount)) as.integer(cfg$VesselCount) else 2L
-    if (!is.finite(n_vessels) || n_vessels < 1L) n_vessels <- 2L
-
-    # Diameter range
-    dmin <- if (!is.null(cfg$VesselDiameterMin)) as.integer(cfg$VesselDiameterMin) else default_diam
-    dmax <- if (!is.null(cfg$VesselDiameterMax)) as.integer(cfg$VesselDiameterMax) else default_diam
-    if (!is.finite(dmin) || dmin < 1L) dmin <- 1L
-    if (!is.finite(dmax) || dmax < dmin) dmax <- dmin
-
-    # Sample diameters uniformly in [dmin, dmax]
-    diam_vec <- if (dmin == dmax) {
-      rep(dmin, n_vessels)
-    } else {
-      sample(seq.int(dmin, dmax), size = n_vessels, replace = TRUE)
-    }
-
-    # Random centers on the N x N grid. Parts that would fall outside are truncated
-    # by make_vessel_mask via index clamping.
-    centers <- lapply(seq_len(n_vessels), function(k) {
-      c(sample.int(N, 1L), sample.int(N, 1L))
-    })
-
-    vessel_mask <- make_vessel_mask(N, centers = centers, diameter = diam_vec)
-  } else {
-    # Original deterministic behavior
-    diam <- default_diam
-    centers <- NULL
-    if (!is.null(cfg$VesselCenters)) {
-      centers <- resolve_vessel_centers(N, cfg$VesselCenters, diam)
-    }
-    vessel_mask <- make_vessel_mask(N, centers = centers, diameter = diam)
-  }
-
-  # In vessel mode, default to no boundary source (C++ may still honor cfg if needed)
-  cfg$O2UseBoundary   <- FALSE
-  cfg$O2BoundaryMode  <- "neumann"
-  cfg$O2BoundaryValue <- 0.0
-
-  # Initial O2 field: uniform Coxy_scalar; C++ will evolve it with vessels
-  O2 <- matrix(cfg$Coxy_scalar, nrow = N, ncol = N)
-
-  # Initialize karyotypes from K distribution
+  # Prepare karyotype fitness distribution K and fit LogNormal on log(K).
+  # If no KaryoPath is provided, generate a narrow LogNormal distribution
+  # centered at mean ploidy ~2.
   if (is.null(cfg$KaryoPath) || !nzchar(cfg$KaryoPath)) {
-    # Fallback: synthetic K from a very narrow LogNormal with mean 2
-    set.seed(123)
     mu_target <- log(2)
     sigma <- 0.01
     K <- rlnorm(2000L, meanlog = mu_target, sdlog = sigma)
   } else {
     K <- load_K_column(cfg$KaryoPath)
   }
+
   fit <- fit_lognormal_from_K(K)
 
-  # Initial seeding density: m% of non-vessel grid
-  n_init <- max(1L, round(N * N * (cfg$m / 100)))
-  allowed <- which(as.vector(vessel_mask) == 0L)
-  if (length(allowed) < n_init) {
-    stop("Not enough non-vessel locations to place initial cells. Reduce m or vessel diameter.")
-  }
-  pos <- sample(allowed, n_init, replace = FALSE)
-  X <- as.integer((pos - 1L) %% N + 1L)
-  Y <- as.integer((pos - 1L) %/% N + 1L)
-
-  cells <- make_cells_df(n_init)
-  cells$X <- X
-  cells$Y <- Y
-
-  # Initialize P from fitted LogNormal, clamp to configured ploidy cap
-  pmax_cfg <- if (is.finite(cfg$PloidyMax)) as.numeric(cfg$PloidyMax) else Inf
-  cells$P <- sample_P_from_fit(n_init, fit = fit, clamp = c(0, pmax_cfg))
-
-  # Invert P into integer karyotype (C++ helper), with per-chromosome cap
-  max_copy_cpp <- if (is.finite(cfg$PloidyMax)) {
-    as.integer(cfg$PloidyMax)
-  } else {
-    .Machine$integer.max
-  }
-  kt_mat <- karyotype_from_P_batch_weighted_cpp(
-    as.numeric(cells$P),
-    as.numeric(CHR_W),
-    1e-3,
-    20000L,
-    max_copy_cpp
+  # Delegate heavy initialization (grid, O2, vessels, cells) to C++.
+  state <- init_simulation_cpp(
+    cfg   = cfg,
+    mu    = unname(fit$mu),
+    sigma = unname(fit$sigma)
   )
 
-  # Initial karyotypes: enforce a softer cap at 5 unless PloidyMax is lower
-  kt_init_cap <- 5L
-  if (is.finite(cfg$PloidyMax)) {
-    kt_init_cap <- as.integer(min(kt_init_cap, cfg$PloidyMax))
-  }
-  kt_mat <- pmin(kt_mat, kt_init_cap)
-  storage.mode(kt_mat) <- "integer"
-
-  cells[, paste0("C", 1:22)] <- kt_mat
-
-  # Backfill P with actual integer-weighted mean (C++ helper)
-  cells$P <- mean_copy_number_rows_weighted_cpp(kt_mat, as.numeric(CHR_W))
-
-  # Scalar attributes
-  cells$R <- cfg$R
-  cells$D <- cfg$Db
-  cells$WGDLabel <- 0L
-  if (is.null(cells$WGDCount)) cells$WGDCount <- integer(nrow(cells))
-  cells$DivisionTime <- 0.0
-  cells$Time <- 0.0
-  cells$Status <- 1L
-  if (is.null(cells$DeathReason)) cells$DeathReason <- NA_character_
-
-  # Initial WGD proportion WGDp
-  if (cfg$WGDp > 0) {
-    k <- max(0L, floor(n_init * cfg$WGDp))
-    if (k > 0) {
-      idx <- sample(seq_len(n_init), k, replace = FALSE)
-      for (i in idx) {
-        v <- as.integer(cells[i, paste0("C", 1:22)])
-        if (is.finite(cfg$PloidyMax)) {
-          v <- pmin(as.integer(cfg$PloidyMax), v * 2L)
-        } else {
-          v <- v * 2L
-        }
-        cells[i, paste0("C", 1:22)] <- v
-        cells$WGDLabel[i] <- 1L
-        cells$P[i] <- mean_copy_number_weighted_cpp(as.integer(v), as.numeric(CHR_W))
-        cells$WGDCount[i] <- as.integer(cells$WGDCount[i]) + 1L
-      }
-    }
-  }
-
-  # Place cells on grid (C++ helper)
-  grid <- rebuild_grid_from_cells_cpp(grid, as.integer(cells$X), as.integer(cells$Y))
-
-  # Initial G & DivisionTime via C++ batch; randomize Time in [0,24]
-  res0 <- compute_G_and_Div_cpp(
-    grid,
-    O2,
-    as.integer(cells$X),
-    as.integer(cells$Y),
-    as.numeric(cells$R),
-    as.numeric(cells$P),
-    as.numeric(cfg$beta),
-    as.integer(121L),
-    as.integer(5L)
-  )
-  cells$G <- as.numeric(res0$G)
-  cells$DivisionTime <- as.numeric(res0$DivisionTime)
-  cells$Time <- runif(n_init, min = 0, max = 24)
-
-  list(
-    grid        = grid,
-    O2          = O2,
-    cells       = cells,
-    cfg         = cfg,
-    step        = 0L,
-    vessel_mask = vessel_mask,
-    dead_log    = init_dead_log(cells),
-    seed        = seed_to_use
-  )
+  # Store the seed used for this run in the returned state, for reproducibility.
+  state$seed <- seed_to_use
+  state
 }
 
 # -------------------------------
@@ -752,6 +599,10 @@ run_abm_simulations <- function(cfg, cpp_path, steps = 720L) {
       out_dir  <- file.path(out_base_dir, coxy_dir, sprintf("Rep_%03d", ri))
 
       state <- init_simulation(cfg_run, seed = NULL)
+
+      # Save an initial snapshot at time 0
+      save_cells_snapshot(state, t = 0L, dir = out_dir)
+
       state <- run_simulation(state, steps = steps, out_dir = out_dir)
 
       list(
