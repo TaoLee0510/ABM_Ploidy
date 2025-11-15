@@ -66,3 +66,4 @@ for (ii in seq_along(wgdr_values)) {
 
 # Optionally return the list of results (one entry per WGDr value) when sourced
 invisible(res_all)
+gc()

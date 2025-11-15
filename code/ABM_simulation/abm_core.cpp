@@ -368,39 +368,23 @@ List compute_G_Div_quiescence_cpp(int N, NumericMatrix O2,
                                   NumericVector Rv, NumericVector Pv,
                                   double beta, int Kcap, int radius,
                                   IntegerVector Quiescent, NumericVector QuiescentTime,
-                                  double q_death_thresh_hours) {
+                                  double q_death_thresh_hours,
+                                  double softness) {
   int n = X.size();
   if (Y.size()!=n || Rv.size()!=n || Pv.size()!=n ||
       Quiescent.size()!=n || QuiescentTime.size()!=n) {
     stop("compute_G_Div_quiescence_cpp: Input vector lengths must match");
   }
 
-  IntegerMatrix occ(N,N);
-  for (int i=0;i<n;++i){
-    int xi = X[i]-1;
-    int yj = Y[i]-1;
-    if (xi>=0 && xi<N && yj>=0 && yj<N) occ(xi,yj) = 1;
-  }
-
-  NumericMatrix pref(N+1, N+1);
-  for (int i=1;i<=N;++i){
-    double rowsum = 0.0;
-    for (int j=1;j<=N;++j){
-      rowsum += (double)occ(i-1,j-1);
-      pref(i,j) = pref(i-1,j) + rowsum;
+  // Occupancy matrix: 1 if occupied, 0 otherwise
+  IntegerMatrix occ(N, N);
+  for (int i = 0; i < n; ++i) {
+    int xi = X[i] - 1;
+    int yj = Y[i] - 1;
+    if (xi >= 0 && xi < N && yj >= 0 && yj < N) {
+      occ(xi, yj) = 1;
     }
   }
-
-  auto rect_sum = [&](int r1,int c1,int r2,int c2)->int{
-    if (r1<1) r1=1;
-    if (c1<1) c1=1;
-    if (r2>N) r2=N;
-    if (c2>N) c2=N;
-    if (r1>r2 || c1>c2) return 0;
-    double s = pref(r2,c2) - pref(r1-1,c2) - pref(r2,c1-1) + pref(r1-1,c1-1);
-    if (s < 0) s = 0;
-    return (int)std::llround(s);
-  };
 
   NumericVector G(n);
   NumericVector Div(n);
@@ -411,28 +395,48 @@ List compute_G_Div_quiescence_cpp(int N, NumericMatrix O2,
   for (int idx=0; idx<n; ++idx){
     int xi = X[idx];
     int yj = Y[idx];
-    int rmin = xi - radius;
-    int rmax = xi + radius;
-    int cmin = yj - radius;
-    int cmax = yj + radius;
-    int n_occ = rect_sum(rmin, cmin, rmax, cmax);
+    int r2 = radius * radius;
+    int n_occ = 0;
+    int local_sites = 0;
+    for (int di = -radius; di <= radius; ++di) {
+      int ii = xi + di;
+      if (ii < 1 || ii > N) continue;
+      for (int dj = -radius; dj <= radius; ++dj) {
+        int jj = yj + dj;
+        if (jj < 1 || jj > N) continue;
+        if (di * di + dj * dj > r2) continue; // outside circle
+        ++local_sites;
+        if (occ(ii - 1, jj - 1) == 1) {
+          ++n_occ;
+        }
+      }
+    }
 
     double Rcell = Rv[idx];
-    double th = 1.0 - O2(xi-1, yj-1);
+    double th = 1.0 - O2(xi - 1, yj - 1);
     double Pval = Pv[idx];
     if (!(R_finite(Pval)) || Pval < 0.0) Pval = 0.0;
 
     double base = Rcell * (1.0 - th * (beta * Pval));
     if (base < 0.0) base = 0.0;
-    double dens = 1.0 - ((double)n_occ / (double)Kcap);
-    if (dens < 0.0) dens = 0.0;
-    double g = base * dens;
 
-    // Overcrowding forces quiescence, but we do not need to manually set g here;
-    // g will typically be <= 0 when density is very high.
-    if (n_occ >= Kcap) {
-      Qout[idx] = 1;
+    // Smooth density factor based on local circular neighborhood occupancy.
+    // occ_frac = 1.0 corresponds to a fully packed local neighborhood.
+    double occ_frac = 0.0;
+    if (local_sites > 0) {
+      occ_frac = static_cast<double>(n_occ) / static_cast<double>(local_sites);
     }
+
+    double dens;
+    if (occ_frac >= 1.0) {
+      // Geometric saturation: no remaining growth space.
+      dens = 0.0;
+    } else {
+      double x = (occ_frac - 1.0) / softness;
+      dens = 1.0 / (1.0 + std::exp(x));
+    }
+
+    double g = base * dens;
 
     // Unified rule: any non‑positive growth (g <= 0) is treated as quiescent.
     // Such cells get DivisionTime = Inf and are processed by the quiescence timer
@@ -885,6 +889,16 @@ List simulate_step_cpp(List state) {
   double PloidyMax =
       cfg.containsElementNamed("PloidyMax") ? as<double>(cfg["PloidyMax"]) : R_PosInf;
 
+  double MigProb =
+      cfg.containsElementNamed("MigProb") ? as<double>(cfg["MigProb"]) : 0.2;
+  if (!R_finite(MigProb)) MigProb = 0.2;
+  if (MigProb < 0.0) MigProb = 0.0;
+  if (MigProb > 1.0) MigProb = 1.0;
+
+  bool MigBiasToVessel =
+      (cfg.containsElementNamed("MigBiasToVessel") &&
+       as<bool>(cfg["MigBiasToVessel"]));
+
   int max_copy_cpp =
     (R_finite(PloidyMax)) ? (int)PloidyMax : std::numeric_limits<int>::max();
   int ploidy_cap_death =
@@ -897,6 +911,91 @@ List simulate_step_cpp(List state) {
     int irow = snapshot[snap_idx];
     if (irow >= n_cells) continue;
     if (Status[irow] != 1) continue;
+
+    // Current coordinates
+    int i = X[irow];
+    int j = Y[irow];
+
+    // Random migration: with probability MigProb, move one step into a random empty neighbor cell.
+    if (R::runif(0.0, 1.0) < MigProb) {
+      IntegerMatrix empty_m = empty_neighbors_cpp(grid, i, j);
+      std::vector<int> mig_idx;
+      if (empty_m.nrow() > 0) {
+        for (int k = 0; k < empty_m.nrow(); ++k) {
+          int ni = empty_m(k, 0);
+          int nj = empty_m(k, 1);
+          if (has_vessel && vessel_mask(ni - 1, nj - 1) == 1) continue;
+          mig_idx.push_back(k);
+        }
+      }
+      if (!mig_idx.empty()) {
+        int choice_m;
+        // If no bias is requested or no vessel mask is available, keep uniform choice
+        if (!MigBiasToVessel || !has_vessel) {
+          if (mig_idx.size() == 1) {
+            choice_m = mig_idx[0];
+          } else {
+            choice_m = mig_idx[(int)std::floor(R::runif(0.0, 1.0) * mig_idx.size())];
+          }
+        } else {
+          // Bias migration toward neighbors with higher oxygen (proximal to vessels).
+          int m = (int)mig_idx.size();
+          std::vector<double> w(m);
+          double sumw = 0.0;
+          for (int t = 0; t < m; ++t) {
+            int row_idx = mig_idx[t];
+            int ni = empty_m(row_idx, 0);
+            int nj = empty_m(row_idx, 1);
+            double o2_val = O2(ni - 1, nj - 1);
+            if (!R_finite(o2_val) || o2_val < 0.0) o2_val = 0.0;
+            if (o2_val > 1.0) o2_val = 1.0;
+            // Simple linear weight: neighbors with higher O2 more likely.
+            double wt = 1e-6 + o2_val;
+            w[t] = wt;
+            sumw += wt;
+          }
+          if (sumw <= 0.0) {
+            // Fallback to uniform if for some reason no positive weight
+            if (m == 1) {
+              choice_m = mig_idx[0];
+            } else {
+              choice_m = mig_idx[(int)std::floor(R::runif(0.0, 1.0) * mig_idx.size())];
+            }
+          } else {
+            double r = R::runif(0.0, 1.0) * sumw;
+            double acc = 0.0;
+            int chosen_idx = m - 1;
+            for (int t = 0; t < m; ++t) {
+              acc += w[t];
+              if (r <= acc) {
+                chosen_idx = t;
+                break;
+              }
+            }
+            choice_m = mig_idx[chosen_idx];
+          }
+        }
+
+        int xi_new = empty_m(choice_m, 0);
+        int yj_new = empty_m(choice_m, 1);
+
+        // Clear old position if it still references this cell
+        if (i >= 1 && i <= N && j >= 1 && j <= N) {
+          if (grid(i - 1, j - 1) == (irow + 1)) {
+            grid(i - 1, j - 1) = NA_INTEGER;
+          }
+        }
+        // Update coordinates and grid with new position
+        X[irow] = xi_new;
+        Y[irow] = yj_new;
+        grid(xi_new - 1, yj_new - 1) = irow + 1;
+
+        // Refresh local variables
+        i = xi_new;
+        j = yj_new;
+      }
+    }
+
     // Only attempt division if the cell has reached its division time
     if (!R_finite(DivisionTime[irow]) || DivisionTime[irow] <= 0.0) {
       // Non-proliferative or undefined division schedule: skip division this step
@@ -908,8 +1007,6 @@ List simulate_step_cpp(List state) {
     }
 
     // Quiescence: full 11x11 window
-    int i = X[irow];
-    int j = Y[irow];
     int rmin = std::max(1, i - 5);
     int rmax = std::min(N, i + 5);
     int cmin = std::max(1, j - 5);
@@ -1171,12 +1268,20 @@ List simulate_step_cpp(List state) {
       cfg.containsElementNamed("QuiescentDeathHours")
         ? as<double>(cfg["QuiescentDeathHours"]) : 72.0;
 
+    double softness =
+      cfg.containsElementNamed("CrowdingSoftness")
+        ? as<double>(cfg["CrowdingSoftness"]) : 0.15;
+    if (!R_finite(softness) || softness <= 0.0) {
+      softness = 0.15;
+    }
+
     List res = compute_G_Div_quiescence_cpp(
       N, O2,
       X_a, Y_a,
       R_a, P_a,
       beta, Kcap, radius,
-      Q_a, QT_a, qthresh
+      Q_a, QT_a, qthresh,
+      softness
     );
 
     NumericVector G2  = res["G"];

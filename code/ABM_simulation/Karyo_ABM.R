@@ -70,6 +70,22 @@ read_config <- function(path) {
 
   cfg$Dv    <- max(0, min(1, cfg$Dv))
   cfg$WGDp  <- max(0, min(1, cfg$WGDp))
+
+  # Migration probability per step (0-1); default 0.2 if not provided
+  if (is.null(cfg$MigProb)) {
+    cfg$MigProb <- 0.2
+  } else {
+    cfg$MigProb <- suppressWarnings(as.numeric(cfg$MigProb))
+    if (!is.finite(cfg$MigProb)) cfg$MigProb <- 0.2
+    cfg$MigProb <- max(0, min(1, cfg$MigProb))
+  }
+
+  # Optional bias of migration toward higher O2 / vessel regions
+  if (is.null(cfg$MigBiasToVessel)) {
+    cfg$MigBiasToVessel <- FALSE
+  } else {
+    cfg$MigBiasToVessel <- isTRUE(cfg$MigBiasToVessel)
+  }
   
   wd <- cfg$WGDr
   if (is.list(wd)) wd <- unlist(wd, recursive = TRUE, use.names = FALSE)
@@ -129,6 +145,16 @@ read_config <- function(path) {
     }
   }
 
+  # Crowding softness for logistic density penalty (controls sharpness of G suppression)
+  if (is.null(cfg$CrowdingSoftness)) {
+    cfg$CrowdingSoftness <- 0.15
+  } else {
+    cfg$CrowdingSoftness <- suppressWarnings(as.numeric(cfg$CrowdingSoftness))
+    if (!is.finite(cfg$CrowdingSoftness) || cfg$CrowdingSoftness <= 0) {
+      cfg$CrowdingSoftness <- 0.15
+    }
+  }
+
   # Oxygen PDE defaults (used by C++ core)
   if (is.null(cfg$O2DiffRate))    cfg$O2DiffRate    <- 0.2
   if (is.null(cfg$O2SupplyRate))  cfg$O2SupplyRate  <- 0.05
@@ -149,6 +175,27 @@ read_config <- function(path) {
     cfg$O2BoundaryValue <- max(0, min(1, cfg$O2BoundaryValue))
   }
   if (is.null(cfg$O2VesselSoftSupply)) cfg$O2VesselSoftSupply <- FALSE
+
+  # Random vessel generation controls (optional)
+  if (is.null(cfg$VesselRandom)) {
+    cfg$VesselRandom <- FALSE
+  } else {
+    cfg$VesselRandom <- isTRUE(cfg$VesselRandom)
+  }
+
+  if (!is.null(cfg$VesselCount)) {
+    cfg$VesselCount <- as.integer(cfg$VesselCount)
+    if (!is.finite(cfg$VesselCount) || cfg$VesselCount < 1L) {
+      cfg$VesselCount <- 1L
+    }
+  }
+
+  if (!is.null(cfg$VesselDiameterMin)) {
+    cfg$VesselDiameterMin <- as.numeric(cfg$VesselDiameterMin)
+  }
+  if (!is.null(cfg$VesselDiameterMax)) {
+    cfg$VesselDiameterMax <- as.numeric(cfg$VesselDiameterMax)
+  }
 
   cfg
 }
@@ -193,9 +240,9 @@ sample_P_from_fit <- function(n, fit, clamp = c(0, 10)) {
 # -------------------------------
 
 make_vessel_mask <- function(N, centers = NULL, diameter = 10L) {
-  r <- as.integer(ceiling(as.numeric(diameter) / 2))
+  # Default: five vessels (center + four cardinal directions) using a single diameter.
   if (is.null(centers)) {
-    # Default: five vessels (center + four cardinal directions)
+    r <- as.integer(ceiling(as.numeric(diameter[1]) / 2))
     clamp_inside <- function(ci, cj) {
       ci <- as.integer(max(1L + r, min(N - r, ci)))
       cj <- as.integer(max(1L + r, min(N - r, cj)))
@@ -212,23 +259,50 @@ make_vessel_mask <- function(N, centers = NULL, diameter = 10L) {
       clamp_inside(half, q3)
     )
   }
+
+  if (!is.list(centers)) {
+    stop("make_vessel_mask: 'centers' must be a list of length-2 numeric pairs when not NULL.")
+  }
+
+  # Diameter can be a scalar or a vector with one entry per center.
+  diam_vec <- as.integer(diameter)
+  n_vessels <- length(centers)
+  if (length(diam_vec) == 1L) {
+    diam_vec <- rep(diam_vec, n_vessels)
+  } else if (length(diam_vec) != n_vessels) {
+    stop("make_vessel_mask: length(diameter) must be 1 or match length(centers).")
+  }
+
   mask <- matrix(0L, nrow = N, ncol = N)
-  for (cij in centers) {
-    ci <- as.integer(cij[1]); cj <- as.integer(cij[2])
-    if (!is.finite(ci) || !is.finite(cj)) {
-      stop(sprintf("make_vessel_mask: invalid center with NA/NaN: (%s)", paste(cij, collapse = ",")))
-    }
-    if (ci < 1L || ci > N || cj < 1L || cj > N) {
-      stop(sprintf("make_vessel_mask: center out of bounds after clamping: (%d,%d)", ci, cj))
-    }
-    imin <- max(1L, ci - r); imax <- min(N, ci + r)
-    jmin <- max(1L, cj - r); jmax <- min(N, cj + r)
-    for (ii in imin:imax) {
-      for (jj in jmin:jmax) {
-        if ((ii - ci)^2 + (jj - cj)^2 <= r^2) mask[ii, jj] <- 1L
+
+  for (idx in seq_len(n_vessels)) {
+    int_d <- as.integer(diam_vec[idx])
+    if (!is.finite(int_d) || int_d < 1L) next
+    int_r <- as.integer(ceiling(as.numeric(int_d) / 2))
+
+    cij <- centers[[idx]]
+    if (length(cij) < 2L) next
+    int_ci <- as.integer(cij[1])
+    int_cj <- as.integer(cij[2])
+
+    # Allow centers near the boundary. Any part of the circle that would fall
+    # outside the grid is simply truncated by clamping the loop ranges to [1, N].
+    int_imin <- max(1L, int_ci - int_r)
+    int_imax <- min(N,  int_ci + int_r)
+    int_jmin <- max(1L, int_cj - int_r)
+    int_jmax <- min(N,  int_cj + int_r)
+
+    if (int_imin > int_imax || int_jmin > int_jmax) next
+
+    for (ii in int_imin:int_imax) {
+      for (jj in int_jmin:int_jmax) {
+        if ((ii - int_ci)^2 + (jj - int_cj)^2 <= int_r^2) {
+          mask[ii, jj] <- 1L
+        }
       }
     }
   }
+
   mask
 }
 
@@ -379,7 +453,21 @@ init_dead_log <- function(cells_template) {
 # -------------------------------
 
 init_simulation <- function(cfg, seed = NULL) {
-  if (!is.null(seed)) set.seed(seed)
+  # Seed control is handled locally in this initializer.
+  # Priority: explicit argument > cfg$Seed > random seed.
+  seed_to_use <- NA_integer_
+
+  if (!is.null(seed)) {
+    seed_to_use <- suppressWarnings(as.integer(seed))
+  } else if (!is.null(cfg$Seed)) {
+    seed_to_use <- suppressWarnings(as.integer(cfg$Seed))
+  }
+
+  if (!is.finite(seed_to_use)) {
+    seed_to_use <- sample.int(.Machine$integer.max, 1L)
+  }
+
+  set.seed(seed_to_use)
 
   N <- as.integer(cfg$N1)
   grid <- matrix(NA_integer_, nrow = N, ncol = N)
@@ -394,12 +482,44 @@ init_simulation <- function(cfg, seed = NULL) {
   }
 
   # Vessel geometry
-  diam <- if (!is.null(cfg$VesselDiameter)) as.integer(cfg$VesselDiameter) else 10L
-  centers <- NULL
-  if (!is.null(cfg$VesselCenters)) {
-    centers <- resolve_vessel_centers(N, cfg$VesselCenters, diam)
+  # If VesselRandom is TRUE, generate random vessel centers and diameters.
+  # Otherwise, use either explicit VesselCenters or the default five-vessel pattern.
+  default_diam <- if (!is.null(cfg$VesselDiameter)) as.integer(cfg$VesselDiameter) else 10L
+
+  if (!is.null(cfg$VesselRandom) && isTRUE(cfg$VesselRandom)) {
+    # Number of random vessels
+    n_vessels <- if (!is.null(cfg$VesselCount)) as.integer(cfg$VesselCount) else 2L
+    if (!is.finite(n_vessels) || n_vessels < 1L) n_vessels <- 2L
+
+    # Diameter range
+    dmin <- if (!is.null(cfg$VesselDiameterMin)) as.integer(cfg$VesselDiameterMin) else default_diam
+    dmax <- if (!is.null(cfg$VesselDiameterMax)) as.integer(cfg$VesselDiameterMax) else default_diam
+    if (!is.finite(dmin) || dmin < 1L) dmin <- 1L
+    if (!is.finite(dmax) || dmax < dmin) dmax <- dmin
+
+    # Sample diameters uniformly in [dmin, dmax]
+    diam_vec <- if (dmin == dmax) {
+      rep(dmin, n_vessels)
+    } else {
+      sample(seq.int(dmin, dmax), size = n_vessels, replace = TRUE)
+    }
+
+    # Random centers on the N x N grid. Parts that would fall outside are truncated
+    # by make_vessel_mask via index clamping.
+    centers <- lapply(seq_len(n_vessels), function(k) {
+      c(sample.int(N, 1L), sample.int(N, 1L))
+    })
+
+    vessel_mask <- make_vessel_mask(N, centers = centers, diameter = diam_vec)
+  } else {
+    # Original deterministic behavior
+    diam <- default_diam
+    centers <- NULL
+    if (!is.null(cfg$VesselCenters)) {
+      centers <- resolve_vessel_centers(N, cfg$VesselCenters, diam)
+    }
+    vessel_mask <- make_vessel_mask(N, centers = centers, diameter = diam)
   }
-  vessel_mask <- make_vessel_mask(N, centers = centers, diameter = diam)
 
   # In vessel mode, default to no boundary source (C++ may still honor cfg if needed)
   cfg$O2UseBoundary   <- FALSE
@@ -522,7 +642,8 @@ init_simulation <- function(cfg, seed = NULL) {
     cfg         = cfg,
     step        = 0L,
     vessel_mask = vessel_mask,
-    dead_log    = init_dead_log(cells)
+    dead_log    = init_dead_log(cells),
+    seed        = seed_to_use
   )
 }
 
