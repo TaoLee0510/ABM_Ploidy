@@ -6,6 +6,7 @@ suppressPackageStartupMessages({
   library(dplyr)
   library(purrr)
   library(scales)
+  library(parallel)
 })
 
 # --------- Helper: discover parameter combinations ---------
@@ -147,13 +148,13 @@ plot_ploidy_hist <- function(state, out_path) {
     geom_histogram(
       aes(y = after_stat(..count.. / sum(..count..)),
           fill = after_stat(x)),
-      binwidth = 0.01,
+      binwidth = 0.1,
       boundary = 0,
       closed = "right"
     ) +
     scale_fill_viridis(option = "plasma", limits = c(0, 10), oob = squish) +
     xlim(0, 10) +
-    scale_y_continuous(limits = c(0, 0.05), expand = expansion(mult = c(0, 0.02))) +
+    scale_y_continuous(limits = c(0, 0.25), expand = expansion(mult = c(0, 0.02))) +
     labs(x = "Ploidy", y = "Proportion per bin") +
     theme_minimal(base_size = 10) +
     theme(
@@ -337,11 +338,14 @@ analyze_all_abm_results <- function(
     stop("No parameter combinations (WGDp_*/WGDr_*/Coxy_*/Rep_*) found under ", base_dir)
   }
   
-  res <- lapply(combos, function(cb) {
+  n_cores <- max(1L, parallel::detectCores() - 1L)
+  message("Using ", n_cores, " cores for analysis.")
+  
+  res <- parallel::mclapply(combos, function(cb) {
     message("Analyzing combo: ", make_param_label(cb),
             " (path: ", cb$path, ")")
     analyze_one_combo(cb, base_dir = base_dir)
-  })
+  }, mc.cores = n_cores)
   
   invisible(res)
 }
